@@ -293,6 +293,20 @@ export async function remove({ id } = {}) {
     throw new Error('A positive numeric watchlist id is required (get it from watchlist_list)');
   }
 
+  // TradingView's "colored" lists are the built-in flag lists (one per colour, addressed
+  // by colour, not by id): DELETE /custom/{id}/ answers 404 for them and there is no
+  // delete endpoint at all. Say so instead of reporting a bare HTTP status
+  // (live 2026-09-23: id 160678173 "Stocks Watchlist" is the red flag list).
+  const known = await evaluateAsync(`
+    fetch(location.origin + '/api/v1/symbols_list/all/', { credentials: 'include', headers: { 'Accept': 'application/json' } })
+      .then(function(r) { return r.ok ? r.json() : []; })
+      .then(function(j) { var m = (j || []).filter(function(l) { return l && l.id === ${numId}; })[0]; return m ? { type: m.type, name: m.name, color: m.color } : null; })
+      .catch(function() { return null; })
+  `);
+  if (known && known.type === 'colored') {
+    throw new Error(`Watchlist ${numId} ("${known.name}") is TradingView's built-in ${known.color || ''} flag list (type colored) — flag lists cannot be deleted; clear or rename it in the UI instead`);
+  }
+
   const result = await evaluateAsync(`
     fetch(location.origin + '/api/v1/symbols_list/custom/' + ${numId} + '/', {
       method: 'DELETE',
