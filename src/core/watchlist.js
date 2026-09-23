@@ -231,6 +231,57 @@ export async function list() {
   return { success: true, count: lists.length, source: 'rest_api', lists };
 }
 
+async function _postSymbols(id, action, symbols) {
+  const numId = Number(id);
+  if (!Number.isInteger(numId) || numId <= 0) {
+    throw new Error('A positive numeric watchlist id is required (get it from watchlist_list)');
+  }
+  const clean = (Array.isArray(symbols) ? symbols : []).map(s => String(s).trim()).filter(Boolean);
+  if (clean.length === 0) throw new Error('At least one symbol is required');
+  const payloadLiteral = safeString(JSON.stringify(clean));
+  const result = await evaluateAsync(`
+    (function() {
+      var body = ${payloadLiteral};
+      var url = location.origin + '/api/v1/symbols_list/custom/' + ${numId} + '/${action}/';
+      return fetch(url, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        body: body
+      })
+        .then(function(r) { return r.text().then(function(t) {
+          var data = null; try { data = JSON.parse(t); } catch (e) {}
+          return { ok: r.ok, status: r.status, data: data, raw: data ? null : String(t).slice(0, 300) };
+        }); })
+        .catch(function(e) { return { ok: false, status: 0, error: String((e && e.message) || e) }; });
+    })()
+  `);
+  if (!result || !result.ok) {
+    const detail = result?.error || result?.raw || ('HTTP ' + (result?.status ?? '??'));
+    throw new Error(`Watchlist ${action} failed: ${detail}`);
+  }
+  // Verify against the list itself — the REST reply shape is not documented.
+  const after = (await list()).lists.find(l => Number(l.id) === numId);
+  const have = new Set((after?.symbols || []).map(s => String(s).toUpperCase()));
+  const verified = action === 'append'
+    ? clean.filter(s => have.has(s.toUpperCase()))
+    : clean.filter(s => !have.has(s.toUpperCase()));
+  return {
+    success: verified.length === clean.length, id: numId, action, requested: clean, verified,
+    unverified: clean.filter(s => !verified.includes(s)), count: after ? after.symbols.length : null, source: 'rest_api',
+  };
+}
+
+/** Append symbols to a named watchlist by id (EXCHANGE:TICKER), verified against watchlist_list afterwards. */
+export async function appendSymbols({ id, symbols } = {}) {
+  return _postSymbols(id, 'append', symbols);
+}
+
+/** Remove symbols from a named watchlist by id, verified against watchlist_list afterwards. */
+export async function removeSymbols({ id, symbols } = {}) {
+  return _postSymbols(id, 'remove', symbols);
+}
+
 /**
  * Delete a custom watchlist by its numeric id (obtain ids from list()).
  * Deletion is scoped strictly by id — never by name — to avoid ambiguous matches.

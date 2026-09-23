@@ -43,6 +43,28 @@ export function registerWatchlistTools(server) {
       catch (err) { return jsonResult({ success: false, error: err.message }, true); }
     });
 
+  server.tool('watchlist_append',
+    'Append symbols (EXCHANGE:TICKER) to a named watchlist by id via the internal REST API; the result is verified against watchlist_list, so success:false means the list did not change.',
+    {
+      id: z.number().int().positive().describe('Numeric watchlist id from watchlist_list'),
+      symbols: z.array(z.string()).min(1).describe('Symbols to add, e.g. ["NASDAQ:NBIS", "NASDAQ:IREN"]'),
+    },
+    async ({ id, symbols }) => {
+      try { return jsonResult(await core.appendSymbols({ id, symbols })); }
+      catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+    });
+
+  server.tool('watchlist_remove_symbols',
+    'Remove symbols from a named watchlist by id via the internal REST API; verified against watchlist_list afterwards.',
+    {
+      id: z.number().int().positive().describe('Numeric watchlist id from watchlist_list'),
+      symbols: z.array(z.string()).min(1).describe('Symbols to remove, exactly as watchlist_list spells them'),
+    },
+    async ({ id, symbols }) => {
+      try { return jsonResult(await core.removeSymbols({ id, symbols })); }
+      catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+    });
+
   server.tool('watchlist_delete',
     'Delete a named watchlist by its numeric id (get the id from watchlist_list). Destructive and scoped strictly by id — never by name.',
     {

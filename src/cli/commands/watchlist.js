@@ -27,6 +27,22 @@ register('watchlist', {
       description: 'List all named watchlists with ids and symbol counts',
       handler: () => core.list(),
     }],
+    ['append', {
+      description: 'Append symbols to a named list by id. Usage: tv watchlist append <id> NASDAQ:NBIS NASDAQ:IREN',
+      handler: (opts, positionals) => {
+        const [id, ...symbols] = positionals;
+        if (!id || symbols.length === 0) throw new Error('Usage: tv watchlist append <id> SYM1 [SYM2 …]');
+        return core.appendSymbols({ id: Number(id), symbols });
+      },
+    }],
+    ['remove-symbols', {
+      description: 'Remove symbols from a named list by id. Usage: tv watchlist remove-symbols <id> NASDAQ:GLXY',
+      handler: (opts, positionals) => {
+        const [id, ...symbols] = positionals;
+        if (!id || symbols.length === 0) throw new Error('Usage: tv watchlist remove-symbols <id> SYM1 [SYM2 …]');
+        return core.removeSymbols({ id: Number(id), symbols });
+      },
+    }],
     ['delete', {
       description: 'Delete a named watchlist by id. Usage: tv watchlist delete 335018981',
       handler: (opts, positionals) => {

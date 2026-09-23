@@ -43,7 +43,7 @@ const READ_ONLY = {
   ui_find_element: { query: 'Save' }, pane_list: {}, tab_list: {}, capture_screenshot: { region: 'chart' },
 };
 // Verbs that always mean mutation, used to classify tools the allowlist does not name.
-const MUTATING = /^(chart_set|chart_manage|chart_scroll|pine_(set|save|new|open|compile|smart|push|pull|add|delete|remove)|draw_(shape|remove|clear)|alert_(create|delete)|watchlist_(add|create|delete)|replay_(start|step|autoplay|stop|trade)|indicator_(set|toggle)|layout_switch|ui_(click|open|close|fullscreen|type|key|eval|scroll|hotkey|dismiss|hover|mouse)|pane_(set|resize|toggle|add|remove|collapse|maximize|focus)|tab_(new|close|switch|open)|batch_run|tv_launch|stream_(start|stop|subscribe|unsubscribe))/;
+const MUTATING = /^(chart_set|chart_manage|chart_scroll|pine_(set|save|new|open|compile|smart|push|pull|add|delete|remove)|draw_(shape|remove|clear)|alert_(create|delete)|watchlist_(add|create|delete|append|remove)|replay_(start|step|autoplay|stop|trade)|indicator_(set|toggle)|layout_switch|ui_(click|open|close|fullscreen|type|key|eval|scroll|hotkey|dismiss|hover|mouse)|pane_(set|resize|toggle|add|remove|collapse|maximize|focus)|tab_(new|close|switch|open)|batch_run|tv_launch|stream_(start|stop|subscribe|unsubscribe))/;
 
 function classify(name) {
   if (name in READ_ONLY) return 'read';
