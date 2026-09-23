@@ -6,6 +6,23 @@ const CDP_HOST = 'localhost';
 const CDP_PORT = 9222;
 const MAX_RETRIES = 5;
 const BASE_DELAY = 500;
+// Runtime.evaluate has no native timeout: if the TV renderer's main thread stalls
+// (heavy chart load, modal, tab navigation invalidating the websocket) an evaluate
+// awaits forever and every later call queues behind it — the server appears dead.
+const EVAL_TIMEOUT_MS = Number(process.env.TV_MCP_EVAL_TIMEOUT_MS) || 15000;
+const LIVENESS_TIMEOUT_MS = 3000;
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(`${label} timed out after ${ms}ms — CDP target stalled or navigated; reconnecting on next call`);
+      err.isCdpTimeout = true;
+      reject(err);
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 // Known direct API paths discovered via live probing (see PROBE_RESULTS.md)
 const KNOWN_PATHS = {
@@ -50,8 +67,13 @@ export function requireFinite(value, name) {
 export async function getClient() {
   if (client) {
     try {
-      // Quick liveness check
-      await client.Runtime.evaluate({ expression: '1', returnByValue: true });
+      // Quick liveness check — timeboxed: a stalled (not closed) websocket never
+      // throws on its own, so an untimed probe would hang here forever.
+      await withTimeout(
+        client.Runtime.evaluate({ expression: '1', returnByValue: true }),
+        LIVENESS_TIMEOUT_MS,
+        'CDP liveness check'
+      );
       return client;
     } catch {
       client = null;
@@ -105,12 +127,27 @@ export async function getTargetInfo() {
 
 export async function evaluate(expression, opts = {}) {
   const c = await getClient();
-  const result = await c.Runtime.evaluate({
-    expression,
-    returnByValue: true,
-    awaitPromise: opts.awaitPromise ?? false,
-    ...opts,
-  });
+  const { timeoutMs, ...cdpOpts } = opts;
+  let result;
+  try {
+    result = await withTimeout(
+      c.Runtime.evaluate({
+        expression,
+        returnByValue: true,
+        awaitPromise: cdpOpts.awaitPromise ?? false,
+        ...cdpOpts,
+      }),
+      timeoutMs ?? EVAL_TIMEOUT_MS,
+      'CDP evaluate'
+    );
+  } catch (err) {
+    if (err.isCdpTimeout) {
+      // Drop the (likely stalled) connection so the next call reconnects fresh.
+      client = null;
+      targetInfo = null;
+    }
+    throw err;
+  }
   if (result.exceptionDetails) {
     const msg = result.exceptionDetails.exception?.description
       || result.exceptionDetails.text
