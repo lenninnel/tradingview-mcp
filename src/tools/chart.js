@@ -59,8 +59,15 @@ export function registerChartTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
-  server.tool('symbol_info', 'Get detailed metadata about the current symbol (name, exchange, type, description)', {}, async () => {
+  server.tool('symbol_info', 'Get detailed metadata about the current symbol (name, exchange, type, description, currency, native_currency, currency_converted, feed/delay)', {}, async () => {
     try { return jsonResult(await core.symbolInfo()); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
+  server.tool('chart_set_currency', 'Set the currency the chart prices its series in. "native" (default) = the symbol\'s own currency, which every data tool expects. Best effort via internal APIs, verified against symbol_info afterwards — success:false means switch it by hand (chart settings → Symbol → Currency).', {
+    currency: z.string().optional().describe('ISO code such as USD, or "native" to remove the conversion (default)'),
+  }, async ({ currency }) => {
+    try { return jsonResult(await core.setCurrency({ currency })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 

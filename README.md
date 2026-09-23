@@ -215,7 +215,9 @@ Claude reads [`CLAUDE.md`](CLAUDE.md) automatically when working in this project
 | "Draw a level at 24500" | `draw_shape` (horizontal_line) |
 | "Take a screenshot" | `capture_screenshot` |
 
-## Tool Reference (78 MCP tools)
+## Tool Reference (82 MCP tools)
+
+Health of the whole surface: `node scripts/smoke_tools.js` calls every read-only tool once against the live chart and writes `reports/smoke-tools-<date>.md` (mutating tools are listed, not called).
 
 ### Chart Reading
 
@@ -223,8 +225,10 @@ Claude reads [`CLAUDE.md`](CLAUDE.md) automatically when working in this project
 |------|------------|-------------|
 | `chart_get_state` | First call — get symbol, timeframe, all indicator names + IDs | ~500B |
 | `data_get_study_values` | Read current RSI, MACD, BB, EMA values from all indicators | ~500B |
-| `quote_get` | Get latest price, OHLC, volume | ~200B |
-| `data_get_ohlcv` | Get price bars. **Use `summary: true`** for compact stats | 500B (summary) / 8KB (100 bars) |
+| `quote_get` | Latest price, OHLC, volume **of the active chart**, with `symbol_resolved`, `description`, `exchange`, `currency`, `feed`. Passing `symbol` is a guard: a mismatch with the chart fails instead of returning the chart's numbers under that label | ~400B |
+| `data_get_ohlcv` | Price bars of the active chart, header states chart symbol + currency. **Use `summary: true`** for compact stats | 700B (summary) / 8KB (100 bars) |
+
+**Currency rule.** TradingView can display a chart converted into the account currency. Such a series reports `currency ≠ native_currency` and `currency_converted: true`; `quote_get`, `data_get_ohlcv` refuse it unless `allow_converted: true`, because every price on it is divided by the FX rate. `chart_set_currency` (best effort, verified) or chart settings → Symbol → Currency → default puts it back. A series that declares no currency at all is refused, always.
 
 ### Custom Indicator Data (Pine Drawings)
 
@@ -249,7 +253,8 @@ Read `line.new()`, `label.new()`, `table.new()`, `box.new()` output from any vis
 | `chart_manage_indicator` | Add/remove indicators. **Use full names**: "Relative Strength Index" not "RSI" |
 | `chart_scroll_to_date` | Jump to a date (ISO: "2025-01-15") |
 | `chart_set_visible_range` | Zoom to exact range (unix timestamps) |
-| `symbol_info` / `symbol_search` | Symbol metadata and search |
+| `symbol_info` / `symbol_search` | Symbol metadata (incl. `currency`, `native_currency`, `currency_converted`, feed/delay) and search |
+| `chart_set_currency` | Price the series in a currency (`native` removes a conversion); success only when `symbol_info` confirms the change |
 | `indicator_set_inputs` / `indicator_toggle_visibility` | Change indicator settings, show/hide |
 
 ### Multi-Pane Layouts

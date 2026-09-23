@@ -39,8 +39,13 @@ register('type', {
 });
 
 register('info', {
-  description: 'Get detailed symbol metadata',
+  description: 'Get detailed symbol metadata (incl. currency, conversion flag, feed)',
   handler: () => core.symbolInfo(),
+});
+
+register('currency', {
+  description: 'Set the chart series currency ("native" = remove conversion); verified after the attempt',
+  handler: (opts, positionals) => core.setCurrency({ currency: positionals[0] }),
 });
 
 register('search', {

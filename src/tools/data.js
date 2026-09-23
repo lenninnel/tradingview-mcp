@@ -3,11 +3,12 @@ import { jsonResult } from './_format.js';
 import * as core from '../core/data.js';
 
 export function registerDataTools(server) {
-  server.tool('data_get_ohlcv', 'Get OHLCV bar data from the chart. Use summary=true for compact stats instead of all bars (saves context).', {
+  server.tool('data_get_ohlcv', 'Get OHLCV bar data from the ACTIVE chart. Every response states the chart symbol and the currency the bars are in; a currency-converted chart is refused unless allow_converted=true. Use summary=true for compact stats instead of all bars (saves context).', {
     count: z.coerce.number().optional().describe('Number of bars to retrieve (max 500, default 100)'),
     summary: z.coerce.boolean().optional().describe('Return summary stats (high, low, open, close, avg volume, range) instead of all bars — much smaller output'),
-  }, async ({ count, summary }) => {
-    try { return jsonResult(await core.getOhlcv({ count, summary })); }
+    allow_converted: z.coerce.boolean().optional().describe('Read bars from a chart that is displayed in a converted currency (default false: such bars are refused because they are divided by the FX rate)'),
+  }, async ({ count, summary, allow_converted }) => {
+    try { return jsonResult(await core.getOhlcv({ count, summary, allow_converted })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
@@ -35,10 +36,11 @@ export function registerDataTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
-  server.tool('quote_get', 'Get real-time quote data for a symbol (price, OHLC, volume)', {
-    symbol: z.string().optional().describe('Symbol to quote (blank = current chart symbol)'),
-  }, async ({ symbol }) => {
-    try { return jsonResult(await core.getQuote({ symbol })); }
+  server.tool('quote_get', 'Quote of the ACTIVE chart (last, OHLC, volume) with symbol_resolved, description, exchange, currency and feed. Passing symbol is a guard: if it is not the chart symbol the tool FAILS instead of returning the chart\'s numbers under that label — call chart_set_symbol first.', {
+    symbol: z.string().optional().describe('Expected symbol (e.g. NASDAQ:NBIS). Must match the active chart; blank = quote whatever the chart shows'),
+    allow_converted: z.coerce.boolean().optional().describe('Accept a chart displayed in a converted currency (default false: refused, because the prices are divided by the FX rate)'),
+  }, async ({ symbol, allow_converted }) => {
+    try { return jsonResult(await core.getQuote({ symbol, allow_converted })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 

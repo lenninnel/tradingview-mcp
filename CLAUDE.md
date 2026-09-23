@@ -1,13 +1,20 @@
 # TradingView MCP — Claude Instructions
 
-68 tools for reading and controlling a live TradingView Desktop chart via CDP (port 9222).
+82 tools for reading and controlling a live TradingView Desktop chart via CDP (port 9222).
+
+## Data-integrity rules (read before quoting any number)
+
+1. **Every price tool reads the ACTIVE chart.** `quote_get` and `data_get_ohlcv` do not look symbols up. Passing `symbol` to `quote_get` is a guard: if it is not the chart symbol the call fails and tells you to `chart_set_symbol` first. Never treat a returned `symbol` as proof of what was quoted — use `symbol_resolved` + `description` + `exchange`.
+2. **Every price carries `currency`.** Check `currency_converted`: `true` means the chart is displayed in the account currency and all prices are divided by the FX rate. The tools refuse such a chart unless `allow_converted: true`; fix it with `chart_set_currency` (`native`) or chart settings → Symbol → Currency → default. A series without a currency yields no numbers.
+3. **`feed` says how fresh the data is** (`realtime`, `delayed_15m`, `eod`). `XETR_DLY:` symbols are 15-minute delayed — say so when you quote them.
+4. Numbers read from a chart are chart-reading, not a second source. A level that goes into a deliverable gets cross-checked against Alpha Vantage or the broker by the desk's quote router.
 
 ## Decision Tree — Which Tool When
 
 ### "What's on my chart right now?"
 1. `chart_get_state` → symbol, timeframe, chart type, list of all indicators with entity IDs
 2. `data_get_study_values` → current numeric values from all visible indicators (RSI, MACD, BBands, EMAs, etc.)
-3. `quote_get` → real-time price, OHLC, volume for current symbol
+3. `quote_get` → price, OHLC, volume for the current symbol, with `symbol_resolved`, `currency`, `feed`
 
 ### "What levels/lines/labels are showing?"
 Custom Pine indicators draw with `line.new()`, `label.new()`, `table.new()`, `box.new()`. These are invisible to normal data tools. Use:
@@ -34,7 +41,8 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 7. `capture_screenshot` → visual confirmation
 
 ### "Change the chart"
-- `chart_set_symbol` → switch ticker (e.g., "AAPL", "ES1!", "NYMEX:CL1!")
+- `chart_set_symbol` → switch ticker (e.g., "AAPL", "ES1!", "NYMEX:CL1!") — required before `quote_get` for any symbol other than the one on the chart
+- `chart_set_currency` → put a converted chart back to its native currency (`native`); verified, may report `success: false` → do it by hand
 - `chart_set_timeframe` → switch resolution (e.g., "1", "5", "15", "60", "D", "W")
 - `chart_set_type` → switch chart style (Candles, HeikinAshi, Line, Area, Renko, etc.)
 - `chart_manage_indicator` → add or remove studies (use full name: "Relative Strength Index", not "RSI")

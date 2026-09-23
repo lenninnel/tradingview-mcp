@@ -2,19 +2,24 @@ import { register } from '../router.js';
 import * as core from '../../core/data.js';
 
 register('quote', {
-  description: 'Get real-time price quote',
-  handler: (opts, positionals) => core.getQuote({ symbol: positionals[0] }),
+  description: 'Quote of the active chart; an optional symbol argument must match the chart or the command fails',
+  options: {
+    'allow-converted': { type: 'boolean', description: 'Accept a chart displayed in a converted currency' },
+  },
+  handler: (opts, positionals) => core.getQuote({ symbol: positionals[0], allow_converted: opts['allow-converted'] }),
 });
 
 register('ohlcv', {
-  description: 'Get OHLCV bar data',
+  description: 'Get OHLCV bar data (states chart symbol + currency)',
   options: {
     count: { type: 'string', short: 'n', description: 'Number of bars (default 100, max 500)' },
     summary: { type: 'boolean', short: 's', description: 'Return summary stats instead of all bars' },
+    'allow-converted': { type: 'boolean', description: 'Accept a chart displayed in a converted currency' },
   },
   handler: (opts) => core.getOhlcv({
     count: opts.count ? Number(opts.count) : undefined,
     summary: opts.summary,
+    allow_converted: opts['allow-converted'],
   }),
 });
 

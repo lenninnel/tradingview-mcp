@@ -3,6 +3,7 @@
  */
 import { evaluate as _evaluate, evaluateAsync as _evaluateAsync, safeString, requireFinite } from '../connection.js';
 import { waitForChartReady as _waitForChartReady } from '../wait.js';
+import { SYMBOL_META_JS, symbolFacts } from './symbol_meta.js';
 
 const CHART_API = 'window.TradingViewApi._activeChartWidgetWV.value()';
 
@@ -11,6 +12,7 @@ function _resolve(deps) {
     evaluate: deps?.evaluate || _evaluate,
     evaluateAsync: deps?.evaluateAsync || _evaluateAsync,
     waitForChartReady: deps?.waitForChartReady || _waitForChartReady,
+    sleep: deps?.sleep || ((ms) => new Promise(r => setTimeout(r, ms))),
   };
 }
 
@@ -34,7 +36,16 @@ export async function getState({ _deps } = {}) {
       };
     })()
   `);
-  return { success: true, ...state };
+  // Currency and feed belong in the state (B1.2): a chart in account currency looks
+  // exactly like a native one on a screenshot.
+  let facts = null;
+  try { facts = symbolFacts(await evaluate(SYMBOL_META_JS)); } catch { facts = null; }
+  const header = facts ? {
+    symbol_resolved: facts.symbol_resolved, description: facts.description, exchange: facts.exchange,
+    currency: facts.currency, native_currency: facts.native_currency, currency_converted: facts.currency_converted,
+    feed: facts.feed, delay_s: facts.delay_s,
+  } : { currency: null, currency_converted: null, feed: null, currency_note: 'symbol metadata unavailable' };
+  return { success: true, ...state, ...header };
 }
 
 export async function setSymbol({ symbol, _deps }) {
@@ -115,14 +126,15 @@ export async function manageIndicator({ action, indicator, entity_id, inputs: in
   }
 }
 
-export async function getVisibleRange() {
+export async function getVisibleRange({ _deps } = {}) {
+  const { evaluate } = _resolve(_deps);
   const result = await evaluate(`
     (function() {
       var chart = ${CHART_API};
       return { visible_range: chart.getVisibleRange(), bars_range: chart.getVisibleBarsRange() };
     })()
   `);
-  return { success: true, visible_range: result.visible_range, bars_range: result.bars_range };
+  return { success: true, visible_range: result?.visible_range, bars_range: result?.bars_range };
 }
 
 export async function setVisibleRange({ from, to, _deps }) {
@@ -157,7 +169,8 @@ export async function setVisibleRange({ from, to, _deps }) {
   return { success: true, requested: { from, to }, actual: actual || { from: 0, to: 0 } };
 }
 
-export async function scrollToDate({ date }) {
+export async function scrollToDate({ date, _deps }) {
+  const { evaluate, sleep } = _resolve(_deps);
   let timestamp;
   if (/^\d+$/.test(date)) timestamp = Number(date);
   else timestamp = Math.floor(new Date(date).getTime() / 1000);
@@ -192,23 +205,86 @@ export async function scrollToDate({ date }) {
       ts.zoomToBarsRange(fromIdx, toIdx);
     })()
   `);
-  await new Promise(r => setTimeout(r, 500));
+  await sleep(500);
   return { success: true, date, centered_on: timestamp, resolution, window: { from, to } };
 }
 
-export async function symbolInfo() {
-  const result = await evaluate(`
+/** Metadata of the active symbol, including the currency the series is priced in (B1.3). */
+export async function symbolInfo({ _deps } = {}) {
+  const { evaluate } = _resolve(_deps);
+  const meta = await evaluate(SYMBOL_META_JS);
+  const facts = symbolFacts(meta);
+  let chartType = null;
+  try { chartType = await evaluate(`${CHART_API}.chartType()`); } catch { chartType = null; }
+  return {
+    success: true,
+    symbol: facts.chart_symbol,
+    full_name: meta.full_name || null,
+    pro_name: meta.pro_name || null,
+    symbol_resolved: facts.symbol_resolved,
+    exchange: facts.exchange,
+    listed_exchange: facts.listed_exchange,
+    description: facts.description,
+    type: facts.type,
+    typespecs: meta.typespecs || null,
+    currency: facts.currency,
+    native_currency: facts.native_currency,
+    currency_converted: facts.currency_converted,
+    currency_id: meta.currency_id || null,
+    original_currency_id: meta.original_currency_id || null,
+    feed: facts.feed,
+    delay_s: facts.delay_s,
+    data_status: facts.data_status,
+    timezone: facts.timezone,
+    session: facts.session,
+    pricescale: meta.pricescale || null,
+    resolution: facts.resolution,
+    chart_type: chartType ?? null,
+    meta_sources: facts.meta_sources,
+  };
+}
+
+/**
+ * Ask the chart to price the series in a given currency (null/"native" = the
+ * symbol's own currency, which is what every data tool expects). The desktop app
+ * exposes no documented API for this; each known path is tried and the result is
+ * VERIFIED against symbolInfo afterwards — success is only reported when the chart
+ * really changed.
+ */
+export async function setCurrency({ currency, _deps } = {}) {
+  const { evaluate, sleep } = _resolve(_deps);
+  const target = currency && !/^(native|default|null|none)$/i.test(String(currency)) ? String(currency).toUpperCase() : null;
+  const attempt = await evaluate(`
     (function() {
-      var chart = ${CHART_API};
-      var info = chart.symbolExt();
-      return {
-        symbol: info.symbol, full_name: info.full_name, exchange: info.exchange,
-        description: info.description, type: info.type, pro_name: info.pro_name,
-        typespecs: info.typespecs, resolution: chart.resolution(), chart_type: chart.chartType()
-      };
+      var api = ${CHART_API};
+      var val = ${JSON.stringify(target)};
+      var tried = [];
+      var ms = null;
+      try { ms = api._chartWidget.model().mainSeries(); } catch(e) { tried.push({ method: 'mainSeries', ok: false, error: e.message }); }
+      function go(name, fn) { try { fn(); tried.push({ method: name, ok: true }); return true; } catch(e) { tried.push({ method: name, ok: false, error: e.message }); return false; } }
+      var done = false;
+      if (ms && typeof ms.setCurrency === 'function') done = go('mainSeries.setCurrency', function() { ms.setCurrency(val); });
+      if (!done && typeof api.setCurrency === 'function') done = go('chart.setCurrency', function() { api.setCurrency(val); });
+      if (!done && ms && typeof ms.properties === 'function') done = go('mainSeries.properties.currencyId', function() {
+        var p = ms.properties().childs();
+        if (!p || !p.currencyId || typeof p.currencyId.setValue !== 'function') throw new Error('no currencyId property');
+        p.currencyId.setValue(val);
+      });
+      return { attempted: done, tried: tried };
     })()
   `);
-  return { success: true, ...result };
+  await sleep(800);
+  const facts = symbolFacts(await evaluate(SYMBOL_META_JS));
+  const ok = target ? facts.currency === target : !facts.currency_converted;
+  return {
+    success: ok,
+    requested: target || 'native',
+    currency: facts.currency,
+    native_currency: facts.native_currency,
+    currency_converted: facts.currency_converted,
+    attempts: attempt?.tried || [],
+    ...(ok ? {} : { hint: 'No known API path changed the series currency. Switch it by hand: chart settings → Symbol → Currency → default (native).' }),
+  };
 }
 
 export async function symbolSearch({ query, type }) {

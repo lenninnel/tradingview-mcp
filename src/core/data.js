@@ -2,11 +2,32 @@
  * Core data access logic.
  */
 import { evaluate, evaluateAsync, KNOWN_PATHS, safeString } from '../connection.js';
+import { SYMBOL_META_JS, assertCurrency, assertSymbolMatch, symbolFacts } from './symbol_meta.js';
 
 const MAX_OHLCV_BARS = 500;
 const MAX_TRADES = 20;
 const CHART_API = KNOWN_PATHS.chartApi;
 const BARS_PATH = KNOWN_PATHS.mainSeriesBars;
+
+// Dependency injection for the price-reading functions so their guards are unit-testable.
+function _resolve(deps) {
+  return { evaluate: deps?.evaluate || evaluate };
+}
+
+const BARS_JS = (limit) => `
+  (function() {
+    var bars = ${BARS_PATH};
+    if (!bars || typeof bars.lastIndex !== 'function') return null;
+    var result = [];
+    var end = bars.lastIndex();
+    var start = Math.max(bars.firstIndex(), end - ${limit} + 1);
+    for (var i = start; i <= end; i++) {
+      var v = bars.valueAt(i);
+      if (v) result.push({time: v[0], open: v[1], high: v[2], low: v[3], close: v[4], volume: v[5] || 0});
+    }
+    return {bars: result, total_bars: bars.size(), source: 'direct_bars'};
+  })()
+`;
 
 function buildGraphicsJS(collectionName, mapKey, filter) {
   return `
@@ -59,25 +80,28 @@ function buildGraphicsJS(collectionName, mapKey, filter) {
   `;
 }
 
-export async function getOhlcv({ count, summary } = {}) {
+/** Symbol facts for the active chart — the identity/currency header every price payload carries. */
+export async function getSymbolFacts({ _deps } = {}) {
+  const { evaluate } = _resolve(_deps);
+  return symbolFacts(await evaluate(SYMBOL_META_JS));
+}
+
+export async function getOhlcv({ count, summary, allow_converted, _deps } = {}) {
+  const { evaluate } = _resolve(_deps);
   const limit = Math.min(count || 100, MAX_OHLCV_BARS);
+
+  // The bars belong to the active chart; say which one, in which currency (B1.1/B1.2).
+  const facts = await getSymbolFacts({ _deps });
+  assertCurrency(facts, allow_converted, 'data_get_ohlcv');
+  const header = {
+    symbol: facts.symbol_resolved, chart_symbol: facts.chart_symbol, description: facts.description,
+    exchange: facts.exchange, listed_exchange: facts.listed_exchange, currency: facts.currency,
+    native_currency: facts.native_currency, currency_converted: facts.currency_converted,
+    feed: facts.feed, delay_s: facts.delay_s, resolution: facts.resolution,
+  };
+
   let data;
-  try {
-    data = await evaluate(`
-      (function() {
-        var bars = ${BARS_PATH};
-        if (!bars || typeof bars.lastIndex !== 'function') return null;
-        var result = [];
-        var end = bars.lastIndex();
-        var start = Math.max(bars.firstIndex(), end - ${limit} + 1);
-        for (var i = start; i <= end; i++) {
-          var v = bars.valueAt(i);
-          if (v) result.push({time: v[0], open: v[1], high: v[2], low: v[3], close: v[4], volume: v[5] || 0});
-        }
-        return {bars: result, total_bars: bars.size(), source: 'direct_bars'};
-      })()
-    `);
-  } catch { data = null; }
+  try { data = await evaluate(BARS_JS(limit)); } catch { data = null; }
 
   if (!data || !data.bars || data.bars.length === 0) {
     throw new Error('Could not extract OHLCV data. The chart may still be loading.');
@@ -91,7 +115,7 @@ export async function getOhlcv({ count, summary } = {}) {
     const first = bars[0];
     const last = bars[bars.length - 1];
     return {
-      success: true, bar_count: bars.length,
+      success: true, ...header, bar_count: bars.length,
       period: { from: first.time, to: last.time },
       open: first.open, close: last.close,
       high: Math.max(...highs), low: Math.min(...lows),
@@ -103,7 +127,7 @@ export async function getOhlcv({ count, summary } = {}) {
     };
   }
 
-  return { success: true, bar_count: data.bars.length, total_available: data.total_bars, source: data.source, bars: data.bars };
+  return { success: true, ...header, bar_count: data.bars.length, total_available: data.total_bars, source: data.source, bars: data.bars };
 }
 
 export async function getIndicator({ entity_id }) {
@@ -242,17 +266,21 @@ export async function getEquity() {
   return { success: true, data_points: equity?.data?.length || 0, source: equity?.source, data: equity?.data || [], equity_summary: equity?.equity_summary, note: equity?.note, error: equity?.error };
 }
 
-export async function getQuote({ symbol } = {}) {
+/**
+ * Quote of the ACTIVE chart. `symbol` is a guard, not a lookup: if it names a
+ * different instrument than the chart shows, this throws instead of answering
+ * with the chart's numbers under the requested label (B1.1).
+ */
+export async function getQuote({ symbol, allow_converted, _deps } = {}) {
+  const { evaluate } = _resolve(_deps);
+  const facts = await getSymbolFacts({ _deps });
+  assertSymbolMatch(symbol, facts, 'quote_get');
+  assertCurrency(facts, allow_converted, 'quote_get');
+
   const data = await evaluate(`
     (function() {
-      var api = ${CHART_API};
-      var sym = ${safeString(symbol || '')};
-      if (!sym) { try { sym = api.symbol(); } catch(e) {} }
-      if (!sym) { try { sym = api.symbolExt().symbol; } catch(e) {} }
-      var ext = {};
-      try { ext = api.symbolExt() || {}; } catch(e) {}
       var bars = ${BARS_PATH};
-      var quote = { symbol: sym };
+      var quote = {};
       if (bars && typeof bars.lastIndex === 'function') {
         var last = bars.valueAt(bars.lastIndex());
         if (last) { quote.time = last[0]; quote.open = last[1]; quote.high = last[2]; quote.low = last[3]; quote.close = last[4]; quote.last = last[4]; quote.volume = last[5] || 0; }
@@ -267,14 +295,30 @@ export async function getQuote({ symbol } = {}) {
         var hdr = document.querySelector('[class*="headerRow"] [class*="last-"]');
         if (hdr) { var hdrPrice = parseFloat(hdr.textContent.replace(/[^0-9.\\-]/g, '')); if (!isNaN(hdrPrice)) quote.header_price = hdrPrice; }
       } catch(e) {}
-      if (ext.description) quote.description = ext.description;
-      if (ext.exchange) quote.exchange = ext.exchange;
-      if (ext.type) quote.type = ext.type;
       return quote;
     })()
   `);
-  if (!data || (!data.last && !data.close)) throw new Error('Could not retrieve quote. The chart may still be loading.');
-  return { success: true, ...data };
+  if (!data || (data.last == null && data.close == null)) throw new Error('Could not retrieve quote. The chart may still be loading.');
+  return {
+    success: true,
+    symbol_requested: symbol ? String(symbol).trim() : null,
+    symbol_resolved: facts.symbol_resolved,
+    // `symbol` kept for backwards compatibility — it is the CHART's symbol, never the request.
+    symbol: facts.symbol_resolved,
+    chart_symbol: facts.chart_symbol,
+    description: facts.description,
+    exchange: facts.exchange,
+    listed_exchange: facts.listed_exchange,
+    type: facts.type,
+    currency: facts.currency,
+    native_currency: facts.native_currency,
+    currency_converted: facts.currency_converted,
+    feed: facts.feed,
+    delay_s: facts.delay_s,
+    resolution: facts.resolution,
+    ...data,
+    source: 'chart_series',
+  };
 }
 
 export async function getDepth() {
